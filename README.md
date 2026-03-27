@@ -608,6 +608,24 @@ Each agent dashboard includes: Threat Hunting, File Integrity Monitoring (FIM), 
 | Vulnerability Detection | CVE tracking by severity across installed packages |
 
 ---
+## Screenshots
+
+### Wazuh Dashboard
+![Wazuh Dashboard](screenshots/wazuh%20dashboard.png)
+![Dashboard](screenshots/dashboard2.png)
+![Dashboard](screenshots/dashboard3.png)
+
+### Agent Setup
+![Creating Agents](screenshots/creating_agents.png)
+![Creating Agents 2](screenshots/creating_agents2.png)
+![Agent Dashboard](screenshots/Agent_Dashboard.png)
+
+### File Integrity Monitoring (FIM)
+![FIM](screenshots/FIM.png)
+![FIM 2](screenshots/FIM2.png)
+![FIM 3](screenshots/FIM3.png)
+![FIM 4](screenshots/FIM4.png)
+![FIM 5](screenshots/FIM5.png)
 
 ## Troubleshooting
 
