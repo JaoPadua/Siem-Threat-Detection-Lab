@@ -611,21 +611,21 @@ Each agent dashboard includes: Threat Hunting, File Integrity Monitoring (FIM), 
 ## Screenshots
 
 ### Wazuh Dashboard
-![Wazuh Dashboard](screenshots/wazuh_login.png)
-![Dashboard](screenshots/dashboard2.png)
-![Dashboard](screenshots/dashboard3.png)
+![Wazuh Dashboard](Screenshots/wazuh_login.png)
+![Dashboard](Screenshots/dashboard2.png)
+![Dashboard](Screenshots/dashboard3.png)
 
 ### Agent Setup
-![Creating Agents](screenshots/creating_agents.png)
-![Creating Agents 2](screenshots/creating_agents2.png)
-![Agent Dashboard](screenshots/Agent_Dashboard.png)
+![Creating Agents](Screenshots/creating_agents.png)
+![Creating Agents 2](Screenshots/creating_agents2.png)
+![Agent Dashboard](Screenshots/Agent_Dashboard.png)
 
 ### File Integrity Monitoring (FIM)
-![FIM](screenshots/FIM.png)
-![FIM 2](screenshots/FIM2.png)
-![FIM 3](screenshots/FIM3.png)
-![FIM 4](screenshots/FIM4.png)
-![FIM 5](screenshots/FIM5.png)
+![FIM](Screenshots/FIM.png)
+![FIM 2](Screenshots/FIM2.png)
+![FIM 3](Screenshots/FIM3.png)
+![FIM 4](Screenshots/FIM4.png)
+![FIM 5](Screenshots/FIM5.png)
 
 ## Troubleshooting
 
