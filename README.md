@@ -611,7 +611,7 @@ Each agent dashboard includes: Threat Hunting, File Integrity Monitoring (FIM), 
 ## Screenshots
 
 ### Wazuh Dashboard
-![Wazuh Dashboard](screenshots/wazuh%20dashboard.png)
+![Wazuh Dashboard](screenshots/wazuh_login.png)
 ![Dashboard](screenshots/dashboard2.png)
 ![Dashboard](screenshots/dashboard3.png)
 
