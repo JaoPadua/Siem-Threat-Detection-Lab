@@ -354,99 +354,365 @@ sudo nano /var/ossec/integrations/custom-telegram.py
 
 ```python
 #!/usr/bin/env python
-import sys, json, requests, re
+#!/usr/bin/env python
+import sys
+import json
+import requests
+import re
 from datetime import datetime, timezone, timedelta
 
-CHAT_ID = "YOUR_CHAT_ID"
+CHAT_ID = "###########"
 
-MALWARE_RULES = [100200, 100201, 100202]
-RDP_RULES     = [60122, 60137, 60138]
-SMTP_RULES    = [67551, 67552, 100032]
-SSH_RULES     = [5712, 5763, 40101]
-SQLI_RULES    = [31103, 31106]
-DDOS_RULES    = []  # find with: grep -r -i "ddos\|flood" /var/ossec/ruleset/rules/ | grep "id="
+# Rule ID categories
+MALWARE_RULES  = [100200, 100201, 100202]
+RDP_RULES      = [60122, 60137, 60138]
+SMTP_RULES     = [67551, 67552, 100032]
+DDOS_RULES     = []
+SSH_RULES      = [5710, 5711, 5712, 5716, 5720, 5763, 100500, 100501, 100502]
+LOGIN_RULES    = [100401, 100402]
+SQLI_RULES     = [31103, 31106]
+SURICATA_RULES = [86601, 86602, 86603, 100300, 100301, 100302]
+NMAP_RULES     = [110001, 110002, 110003, 110004, 110011, 110012]
 
+# Read configuration parameters
 alert_file = open(sys.argv[1])
 hook_url   = sys.argv[3]
+
+# Read the alert file
 alert_json = json.loads(alert_file.read())
 alert_file.close()
 
-alert_level = alert_json['rule'].get('level', 'N/A')
-description = alert_json['rule'].get('description', 'N/A')
-agent       = alert_json['agent'].get('name', 'N/A')
+# Extract common fields
+alert_level = alert_json['rule']['level'] if 'level' in alert_json['rule'] else "N/A"
+description = alert_json['rule']['description'] if 'description' in alert_json['rule'] else "N/A"
+agent       = alert_json['agent']['name'] if 'name' in alert_json['agent'] else "N/A"
 agent_ip    = alert_json['agent'].get('ip', 'N/A')
 rule_id     = int(alert_json['rule'].get('id', 0))
 full_log    = alert_json.get('full_log', 'N/A')
+timestamp_raw = alert_json.get('timestamp', 'N/A')
 
+# Extract MITRE ATT&CK info
+mitre        = alert_json['rule'].get('mitre', {})
+mitre_id     = ', '.join(mitre.get('id', [])) if mitre.get('id') else 'N/A'
+mitre_tactic = ', '.join(mitre.get('tactic', [])) if mitre.get('tactic') else 'N/A'
+mitre_tech   = ', '.join(mitre.get('technique', [])) if mitre.get('technique') else 'N/A'
+
+# Format timestamp to yyyy-mm-dd HH:MM:SS GMT+8
 try:
-    gmt8 = timezone(timedelta(hours=8))
-    ts = datetime.strptime(alert_json.get('timestamp', '')[:19], '%Y-%m-%dT%H:%M:%S')
-    timestamp = ts.replace(tzinfo=gmt8).strftime('%Y-%m-%d %H:%M:%S GMT+8')
-except:
-    timestamp = alert_json.get('timestamp', 'N/A')
+    gmt8     = timezone(timedelta(hours=8))
+    ts_clean = timestamp_raw[:19]
+    ts       = datetime.strptime(ts_clean, '%Y-%m-%dT%H:%M:%S')
+    ts       = ts.replace(tzinfo=gmt8)
+    timestamp = ts.strftime('%Y-%m-%d %H:%M:%S GMT+8')
+except Exception:
+    timestamp = timestamp_raw
 
+# Extract source IP
 src_ip = "N/A"
 if 'data' in alert_json and isinstance(alert_json['data'], dict):
-    src_ip = alert_json['data'].get('srcip') or alert_json['data'].get('src_ip') or "N/A"
+    src_ip = (alert_json['data'].get('srcip') or
+              alert_json['data'].get('src_ip') or
+              alert_json['data'].get('srcUser') or
+              "N/A")
+if src_ip == "N/A" and 'full_log' in alert_json:
+    m = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", alert_json.get('full_log', ''))
+    if m:
+        src_ip = m.group(1)
 if src_ip == "N/A":
-    m = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", full_log)
-    if m: src_ip = m.group(1)
+    src_ip = alert_json.get('agent', {}).get('ip', 'N/A')
 
-malware_name = infected_file = "N/A"
+# Extract malware/file info for ClamAV alerts
+malware_name  = "N/A"
+infected_file = "N/A"
 if rule_id in MALWARE_RULES:
-    m1 = re.search(r"MALWARE DETECTED:\s*([^\|]+)", full_log)
-    m2 = re.search(r"FILE[:\s]+([^\|]+)", full_log)
-    if m1: malware_name  = m1.group(1).strip()
-    if m2: infected_file = m2.group(1).strip()
+    m_virus = re.search(r"MALWARE DETECTED:\s*([^\|]+)", full_log)
+    m_file  = re.search(r"FILE[:\s]+([^\|]+)", full_log)
+    if m_virus:
+        malware_name = m_virus.group(1).strip()
+    if m_file:
+        infected_file = m_file.group(1).strip()
+    if infected_file == "N/A":
+        infected_file = alert_json.get('syscheck', {}).get('path', 'N/A')
+    if malware_name == "N/A":
+        malware_name = alert_json.get('syscheck', {}).get('md5_after', 'Unknown')
+
+# ─── Build message based on rule type ───
 
 if rule_id in MALWARE_RULES:
-    emojis = {100200: ("🦠","MALWARE DETECTED","⚠️ File flagged — awaiting removal"),
-              100201: ("🗑️","MALWARE REMOVED","✅ File automatically removed by ClamAV"),
-              100202: ("📁","FIM MALWARE CORRELATION","⚠️ Suspicious file change detected")}
-    emoji, category, status = emojis[rule_id]
-    text = (f"{emoji} *{category}*\n─────────────────────\n"
+    if rule_id == 100200:
+        emoji    = "🦠"
+        category = "MALWARE DETECTED"
+        status   = "⚠️ File flagged — awaiting removal"
+        text = (
+            f"{emoji} *{category}*\n"
+            f"─────────────────────\n"
             f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
-            f"📋 *Rule ID:* `{rule_id}`\n⚡ *Level:* `{alert_level}`\n"
-            f"🦠 *Malware:* `{malware_name}`\n📄 *File:* `{infected_file}`\n"
-            f"🕐 *Time:* `{timestamp}`\n─────────────────────\n🔰 *Status:* {status}")
+            f"📋 *Rule ID:* `{rule_id}`\n"
+            f"⚡ *Level:* `{alert_level}`\n"
+            f"🦠 *Malware:* `{malware_name}`\n"
+            f"📄 *File:* `{infected_file}`\n"
+            f"🕐 *Time:* `{timestamp}`\n"
+            f"🎯 *MITRE ID:* `{mitre_id}`\n"
+            f"⚔️ *Tactic:* `{mitre_tactic}`\n"
+            f"🔧 *Technique:* `{mitre_tech}`\n"
+            f"─────────────────────\n"
+            f"🔰 *Status:* {status}"
+        )
+    elif rule_id == 100201:
+        emoji    = "🗑️"
+        category = "MALWARE REMOVED"
+        status   = "✅ File automatically removed by ClamAV"
+        text = (
+            f"{emoji} *{category}*\n"
+            f"─────────────────────\n"
+            f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+            f"📋 *Rule ID:* `{rule_id}`\n"
+            f"⚡ *Level:* `{alert_level}`\n"
+            f"🦠 *Malware:* `{malware_name}`\n"
+            f"📄 *File:* `{infected_file}`\n"
+            f"🕐 *Time:* `{timestamp}`\n"
+            f"🎯 *MITRE ID:* `{mitre_id}`\n"
+            f"⚔️ *Tactic:* `{mitre_tactic}`\n"
+            f"🔧 *Technique:* `{mitre_tech}`\n"
+            f"─────────────────────\n"
+            f"🔰 *Status:* {status}"
+        )
+    elif rule_id == 100202:
+        fim_file  = alert_json.get('syscheck', {}).get('path', 'N/A')
+        fim_event = alert_json.get('syscheck', {}).get('event', 'N/A')
+        fim_md5   = alert_json.get('syscheck', {}).get('md5_after', 'N/A')
+        text = (
+            f"📁 *FIM MALWARE CORRELATION*\n"
+            f"─────────────────────\n"
+            f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+            f"📋 *Rule ID:* `{rule_id}`\n"
+            f"⚡ *Level:* `{alert_level}`\n"
+            f"📄 *File:* `{fim_file}`\n"
+            f"🔔 *Event:* `{fim_event}`\n"
+            f"🔑 *MD5:* `{fim_md5}`\n"
+            f"🕐 *Time:* `{timestamp}`\n"
+            f"🎯 *MITRE ID:* `{mitre_id}`\n"
+            f"⚔️ *Tactic:* `{mitre_tactic}`\n"
+            f"🔧 *Technique:* `{mitre_tech}`\n"
+            f"─────────────────────\n"
+            f"🔰 *Status:* ⚠️ Suspicious file change detected"
+        )
+    else:
+        text = f"🦠 *MALWARE ALERT*\n\n📋 Rule: `{rule_id}`\n📝 {description}"
+
+elif rule_id in NMAP_RULES:
+    nmap_cmd  = alert_json.get('data', {}).get('command', 'N/A')
+    nmap_user = alert_json.get('data', {}).get('srcuser', 'N/A')
+    text = (
+        f"🔍 *NMAP / RECON DETECTED*\n"
+        f"─────────────────────\n"
+        f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+        f"📋 *Rule ID:* `{rule_id}`\n"
+        f"⚡ *Level:* `{alert_level}`\n"
+        f"📝 *Description:* {description}\n"
+        f"👤 *User:* `{nmap_user}`\n"
+        f"💻 *Command:* `{nmap_cmd}`\n"
+        f"🕐 *Time:* `{timestamp}`\n"
+        f"🎯 *MITRE ID:* `{mitre_id}`\n"
+        f"⚔️ *Tactic:* `{mitre_tactic}`\n"
+        f"🔧 *Technique:* `{mitre_tech}`\n"
+        f"─────────────────────\n"
+        f"🔰 *Status:* ⚠️ Reconnaissance tool executed on agent"
+    )
+
 elif rule_id in SSH_RULES:
-    text = (f"🔐 *SSH BRUTE FORCE*\n─────────────────────\n"
-            f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
-            f"📋 *Rule ID:* `{rule_id}`\n⚡ *Level:* `{alert_level}`\n"
-            f"📝 *Description:* {description}\n🌐 *Source IP:* `{src_ip}`\n"
-            f"🕐 *Time:* `{timestamp}`\n─────────────────────\n"
-            f"🔰 *Status:* ⚠️ Multiple failed SSH attempts")
-elif rule_id in RDP_RULES:
-    text = (f"🖥️ *RDP ATTACK DETECTED*\n─────────────────────\n"
-            f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
-            f"📋 *Rule ID:* `{rule_id}`\n⚡ *Level:* `{alert_level}`\n"
-            f"📝 *Description:* {description}\n🌐 *Source IP:* `{src_ip}`\n"
-            f"🕐 *Time:* `{timestamp}`\n─────────────────────\n"
-            f"🔰 *Status:* ⚠️ RDP brute force/scan in progress")
-elif rule_id in SMTP_RULES:
-    text = (f"📧 *SMTP ATTACK DETECTED*\n─────────────────────\n"
-            f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
-            f"📋 *Rule ID:* `{rule_id}`\n⚡ *Level:* `{alert_level}`\n"
-            f"📝 *Description:* {description}\n🌐 *Source IP:* `{src_ip}`\n"
-            f"🕐 *Time:* `{timestamp}`\n─────────────────────\n"
-            f"🔰 *Status:* ⚠️ SMTP bot/brute force attempt")
-elif rule_id in SQLI_RULES:
-    text = (f"💉 *SQL INJECTION ATTEMPT*\n─────────────────────\n"
-            f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
-            f"📋 *Rule ID:* `{rule_id}`\n⚡ *Level:* `{alert_level}`\n"
-            f"📝 *Description:* {description}\n🌐 *Source IP:* `{src_ip}`\n"
-            f"🕐 *Time:* `{timestamp}`\n─────────────────────\n"
-            f"🔰 *Status:* ⚠️ SQL Injection pattern detected")
-else:
-    text = (f"⚠️ *WAZUH ALERT*\n─────────────────────\n"
-            f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
-            f"📋 *Rule ID:* `{rule_id}`\n⚡ *Level:* `{alert_level}`\n"
-            f"📝 *Description:* {description}\n🌐 *Source IP:* `{src_ip}`\n"
-            f"🕐 *Time:* `{timestamp}`\n─────────────────────")
+    # Extract username from data or full_log
+    ssh_user = "N/A"
+    if 'data' in alert_json and isinstance(alert_json['data'], dict):
+        ssh_user = (alert_json['data'].get('srcuser') or
+                    alert_json['data'].get('dstuser') or
+                    alert_json['data'].get('user') or
+                    "N/A")
+    if ssh_user == "N/A" and 'full_log' in alert_json:
+        m_user = re.search(
+            r"(?:invalid user|Failed\s+\S+\s+for(?:\s+invalid user)?|for user)\s+(\S+)\s+from",
+            alert_json.get('full_log', ''), re.IGNORECASE
+        )
+        if m_user:
+            ssh_user = m_user.group(1)
 
-requests.post(hook_url,
-    headers={'content-type': 'application/json', 'Accept-Charset': 'UTF-8'},
-    json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'Markdown'})
+    # Determine alert type based on rule
+    if rule_id == 100502 or rule_id in [5712, 5763]:
+        ssh_status = "🚨 Automated brute force attack in progress!"
+        ssh_emoji  = "🔐"
+        ssh_title  = "SSH BRUTE FORCE ATTACK"
+    elif rule_id == 100501:
+        ssh_status = "⚠️ Multiple failed attempts — suspicious activity"
+        ssh_emoji  = "⚠️"
+        ssh_title  = "SUSPICIOUS SSH ACTIVITY"
+    else:
+        ssh_status = "💡 Possible human error or unauthorized attempt"
+        ssh_emoji  = "🔑"
+        ssh_title  = "SSH FAILED LOGIN"
+
+    text = (
+        f"{ssh_emoji} *{ssh_title}*\n"
+        f"─────────────────────\n"
+        f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+        f"📋 *Rule ID:* `{rule_id}`\n"
+        f"⚡ *Level:* `{alert_level}`\n"
+        f"📝 *Description:* {description}\n"
+        f"👤 *Username tried:* `{ssh_user}`\n"
+        f"🌐 *Source IP:* `{src_ip}`\n"
+        f"🕐 *Time:* `{timestamp}`\n"
+        f"─────────────────────\n"
+        f"🔰 *Status:* {ssh_status}"
+    )
+
+elif rule_id in LOGIN_RULES:
+    # Extract username for successful login
+    login_user = "N/A"
+    if 'data' in alert_json and isinstance(alert_json['data'], dict):
+        login_user = (alert_json['data'].get('srcuser') or
+                      alert_json['data'].get('dstuser') or
+                      alert_json['data'].get('user') or
+                      "N/A")
+    if login_user == "N/A" and 'full_log' in alert_json:
+        m_user = re.search(
+            r"(?:Accepted\s+\S+\s+for|session opened for user)\s+(\S+)",
+            alert_json.get('full_log', ''), re.IGNORECASE
+        )
+        if m_user:
+            login_user = m_user.group(1)
+
+    text = (
+        f"✅ *SUCCESSFUL LOGIN*\n"
+        f"─────────────────────\n"
+        f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+        f"📋 *Rule ID:* `{rule_id}`\n"
+        f"⚡ *Level:* `{alert_level}`\n"
+        f"📝 *Description:* {description}\n"
+        f"👤 *Username:* `{login_user}`\n"
+        f"🌐 *Source IP:* `{src_ip}`\n"
+        f"🕐 *Time:* `{timestamp}`\n"
+        f"─────────────────────\n"
+        f"🔰 *Status:* ✅ User logged in successfully"
+    )
+
+elif rule_id in RDP_RULES:
+    text = (
+        f"🖥️ *RDP ATTACK DETECTED*\n"
+        f"─────────────────────\n"
+        f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+        f"📋 *Rule ID:* `{rule_id}`\n"
+        f"⚡ *Level:* `{alert_level}`\n"
+        f"📝 *Description:* {description}\n"
+        f"🌐 *Source IP:* `{src_ip}`\n"
+        f"🕐 *Time:* `{timestamp}`\n"
+        f"─────────────────────\n"
+        f"🔰 *Status:* ⚠️ RDP brute force/scan in progress"
+    )
+
+elif rule_id in SMTP_RULES:
+    text = (
+        f"📧 *SMTP ATTACK DETECTED*\n"
+        f"─────────────────────\n"
+        f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+        f"📋 *Rule ID:* `{rule_id}`\n"
+        f"⚡ *Level:* `{alert_level}`\n"
+        f"📝 *Description:* {description}\n"
+        f"🌐 *Source IP:* `{src_ip}`\n"
+        f"🕐 *Time:* `{timestamp}`\n"
+        f"─────────────────────\n"
+        f"🔰 *Status:* ⚠️ SMTP bot/brute force attempt"
+    )
+
+elif rule_id in SQLI_RULES:
+    http_method = alert_json.get('data', {}).get('id', 'N/A')
+    url         = alert_json.get('data', {}).get('url', 'N/A')
+    protocol    = alert_json.get('data', {}).get('protocol', 'N/A')
+    if protocol == 'N/A' and 'full_log' in alert_json:
+        m_method = re.search(r'"(GET|POST|PUT|DELETE|PATCH|UPDATE)\s+(\S+)', alert_json.get('full_log', ''))
+        if m_method:
+            protocol = m_method.group(1)
+            url      = m_method.group(2)
+    inject_type = "Unknown"
+    url_lower = url.lower()
+    if "union" in url_lower:
+        inject_type = "UNION Based"
+    elif "select" in url_lower:
+        inject_type = "SELECT Injection"
+    elif "insert" in url_lower:
+        inject_type = "INSERT Injection"
+    elif "drop" in url_lower:
+        inject_type = "DROP Injection"
+    elif "where" in url_lower:
+        inject_type = "WHERE Bypass"
+    elif "null" in url_lower:
+        inject_type = "NULL Injection"
+    elif "xp_cmdshell" in url_lower:
+        inject_type = "Command Execution"
+    elif "or" in url_lower or "and" in url_lower:
+        inject_type = "Boolean Based"
+    text = (
+        f"💉 *SQL INJECTION ATTEMPT*\n"
+        f"─────────────────────\n"
+        f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+        f"📋 *Rule ID:* `{rule_id}`\n"
+        f"⚡ *Level:* `{alert_level}`\n"
+        f"📝 *Description:* {description}\n"
+        f"🔗 *Method:* `{protocol}`\n"
+        f"🌐 *Source IP:* `{src_ip}`\n"
+        f"🔍 *URL:* `{url}`\n"
+        f"💣 *Injection Type:* `{inject_type}`\n"
+        f"🕐 *Time:* `{timestamp}`\n"
+        f"🎯 *MITRE ID:* `{mitre_id}`\n"
+        f"⚔️ *Tactic:* `{mitre_tactic}`\n"
+        f"🔧 *Technique:* `{mitre_tech}`\n"
+        f"─────────────────────\n"
+        f"🔰 *Status:* ⚠️ SQL Injection pattern detected"
+    )
+
+elif rule_id in SURICATA_RULES:
+    src_ip_sur = alert_json.get('data', {}).get('src_ip', src_ip)
+    dest_ip    = alert_json.get('data', {}).get('dest_ip', 'N/A')
+    proto      = alert_json.get('data', {}).get('proto', 'N/A')
+    sig_cat    = alert_json.get('data', {}).get('alert', {}).get('category', 'N/A')
+    signature  = alert_json.get('data', {}).get('alert', {}).get('signature', description)
+    severity   = alert_json.get('data', {}).get('alert', {}).get('severity', 'N/A')
+    text = (
+        f"🚨 *SURICATA IDS ALERT*\n"
+        f"─────────────────────\n"
+        f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+        f"📋 *Rule ID:* `{rule_id}`\n"
+        f"⚡ *Level:* `{alert_level}`\n"
+        f"📝 *Signature:* {signature}\n"
+        f"🗂️ *Category:* `{sig_cat}`\n"
+        f"🌐 *Src IP:* `{src_ip_sur}` → *Dst IP:* `{dest_ip}`\n"
+        f"🔌 *Protocol:* `{proto}`\n"
+        f"⚠️ *Severity:* `{severity}`\n"
+        f"🕐 *Time:* `{timestamp}`\n"
+        f"─────────────────────\n"
+        f"🔰 *Status:* 🚨 Network intrusion detected by Suricata"
+    )
+
+else:
+    text = (
+        f"⚠️ *WAZUH ALERT*\n"
+        f"─────────────────────\n"
+        f"🖥️ *Agent:* `{agent}` (`{agent_ip}`)\n"
+        f"📋 *Rule ID:* `{rule_id}`\n"
+        f"⚡ *Level:* `{alert_level}`\n"
+        f"📝 *Description:* {description}\n"
+        f"🌐 *Source IP:* `{src_ip}`\n"
+        f"🕐 *Time:* `{timestamp}`\n"
+        f"─────────────────────"
+    )
+
+# Build and send request
+msg_data = {
+    'chat_id':    CHAT_ID,
+    'text':       text,
+    'parse_mode': 'Markdown'
+}
+
+headers = {'content-type': 'application/json', 'Accept-Charset': 'UTF-8'}
+requests.post(hook_url, headers=headers, data=json.dumps(msg_data))
 sys.exit(0)
 ```
 
