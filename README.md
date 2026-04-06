@@ -156,20 +156,34 @@ sudo nano /usr/local/bin/clamav-scan.sh
 
 ```bash
 #!/bin/bash
-TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 HOSTNAME=$(hostname)
 LOGFILE=/var/log/clamav/detections.log
+SCAN_DIRS="/home/*/Downloads /home/*/Desktop /home/*/Documents /tmp"
 
-nice -n 19 ionice -c 3 clamscan \
-  /home/*/Downloads /home/*/Desktop /home/*/Documents /tmp \
-  --remove --quiet --no-summary 2>/dev/null | while IFS= read -r line; do
-    if echo "$line" | grep -q "FOUND"; then
-        VIRUS=$(echo "$line" | awk '{print $2}')
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Run clamscan and capture output - removed --quiet and --no-summary
+RESULT=$(nice -n 19 ionice -c 3 clamscan \
+  $SCAN_DIRS \
+  --remove \
+  --infected \
+  2>&1)
+
+echo "DEBUG RESULT: $RESULT" 
+
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+if echo "$RESULT" | grep -q "FOUND"; then
+    while IFS= read -r line; do
+        VIRUS=$(echo "$line" | awk '{print $NF}')
         FILE=$(echo "$line" | awk '{print $1}' | tr -d ':')
+        TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
         echo "$TIMESTAMP - MALWARE DETECTED: $VIRUS | FILE: $FILE | HOST: $HOSTNAME" >> $LOGFILE
         echo "$TIMESTAMP - FILE REMOVED: $FILE | HOST: $HOSTNAME" >> $LOGFILE
-    fi
-done
+    done < <(echo "$RESULT" | grep "FOUND")
+else
+    echo "$TIMESTAMP - SCAN COMPLETE: No threats found | HOST: $HOSTNAME" >> $LOGFILE
+fi
 ```
 
 ```bash
@@ -892,6 +906,92 @@ Each agent dashboard includes: Threat Hunting, File Integrity Monitoring (FIM), 
 ![FIM 3](Screenshots/FIM3.png)
 ![FIM 4](Screenshots/FIM4.png)
 ![FIM 5](Screenshots/FIM5.png)
+
+
+### SSH Brute Force Attack
+> Simulated using Hydra against Ubuntu-Agent (192.168.20.105) from attacker machine (192.168.1.50)
+
+#### Detection Logic
+This implementation uses a 3-stage escalation rule to distinguish between human error and an actual brute force attack:
+
+| Stage | Trigger | Rule ID | Level | Classification |
+|---|---|---|---|---|
+| 1 | 1–2 failed attempts | 100500 | 5 | SSH Failed Login — possible human error |
+| 2 | 3–5 failed attempts | 100501 | 7 | Suspicious SSH Activity — likely unauthorized |
+| 3 | 8+ failed attempts | 100502 | 12 | SSH Brute Force Attack — automated attack confirmed |
+
+The escalating severity levels (5 → 7 → 12) ensure that **legitimate mistakes don't trigger false positives** while persistent attacks are caught and escalated immediately.
+
+#### Telegram Alert Progression
+
+**Stage 1 — Possible human error (Level 5)**
+![SSH Failed Login](SSH-Alerts/ssh1.png)
+
+**Stage 2 — Suspicious activity (Level 7)**
+![Suspicious SSH Activity](SSH-Alerts/ssh2.png)
+
+**Stage 3 — Brute force confirmed (Level 12)**
+![SSH Brute Force Attack](SSH-Alerts/ssh3.png)
+
+
+### SQL Injection Attack
+> Simulated using SQLMap against Ubuntu-Agent (192.168.20.105) from attacker machine (192.168.1.90)
+
+#### Detection Logic
+Wazuh detects SQL injection attempts by analyzing web server logs for known SQLi patterns 
+and payloads, mapped to MITRE ATT&CK T1190 — Exploit Public-Facing Application.
+
+| Rule ID | Level | Injection Type | Description |
+|---|---|---|---|
+| 31106 | 6 | UNION Based | Web attack returned code 200 (success) |
+| 31103 | 7 | SELECT Injection | SQL injection attempt detected in URL |
+| 31103 | 7 | WHERE Bypass | SQL injection attempt detected in URL |
+
+#### Telegram Alert Progression
+
+**UNION Based Injection (Rule 31106 — Level 6)**
+![SQL UNION Injection](Sql-Alerts/sqli_union1.png)
+
+**SELECT Injection (Rule 31103 — Level 7)**
+![SQL SELECT Injection](Sql-Alerts/sqli_select.png)
+
+**WHERE Bypass (Rule 31103 — Level 7)**
+![SQL WHERE Bypass](Sql-Alerts/sqli_where2.png)
+
+**UNION Based — continued (Rule 31106 — Level 6)**
+![SQL UNION Injection 2](Sql-Alerts/sqli_union2.png)
+
+**WHERE Bypass — continued (Rule 31103 — Level 7)**
+![SQL WHERE Bypass 2](Sql-Alerts/sqli_where2.png)
+
+**SELECT Injection — continued (Rule 31106 — Level 6)**
+![SQL SELECT Injection 2](Sql-Alerts/sqli_select2.png)
+
+
+
+### Malware Detection (ClamAV)
+> Simulated using EICAR test file dropped into /home/ubuntu-agent/Downloads/ on Ubuntu-Agent (192.168.20.105)
+
+#### Detection Logic
+ClamAV monitors directories in real-time and on scheduled scans. When a malicious file 
+is detected it is immediately quarantined and removed. Wazuh picks up the ClamAV log 
+and fires two sequential alerts — detection followed by removal confirmation.
+
+| Stage | Rule ID | Level | Description |
+|---|---|---|---|
+| 1 | 100200 | 12 | Malware Detected — file flagged, awaiting removal |
+| 2 | 100201 | 10 | Malware Removed — file automatically deleted by ClamAV |
+
+#### Telegram Alert Progression
+
+**Stage 1 — Malware detected (Rule 100200 — Level 12)**
+![Malware Detected](Malware-Alerts/malware_detected.png)
+
+**Stage 2 — Malware removed (Rule 100201 — Level 10)**
+![Malware Removed](Malware-Alerts/malware_removed.png)
+
+
+
 
 ## Troubleshooting
 
