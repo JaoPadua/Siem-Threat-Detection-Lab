@@ -920,17 +920,20 @@ This implementation uses a 3-stage escalation rule to distinguish between human 
 | 2 | 3–5 failed attempts | 100501 | 7 | Suspicious SSH Activity — likely unauthorized |
 | 3 | 8+ failed attempts | 100502 | 12 | SSH Brute Force Attack — automated attack confirmed |
 
-The escalating severity levels (5 → 7 → 12) ensure that **legitimate mistakes don't trigger false positives** while persistent attacks are caught and escalated immediately.
+The escalating severity levels (5 → 7 → 12) ensure that legitimate mistakes don't trigger false positives while persistent attacks are caught and escalated immediately.
 
 #### Telegram Alert Progression
 
 **Stage 1 — Possible human error (Level 5)**
+
 ![SSH Failed Login](SSH-Alerts/ssh1.png)
 
 **Stage 2 — Suspicious activity (Level 7)**
+
 ![Suspicious SSH Activity](SSH-Alerts/ssh2.png)
 
 **Stage 3 — Brute force confirmed (Level 12)**
+
 ![SSH Brute Force Attack](SSH-Alerts/ssh3.png)
 
 
